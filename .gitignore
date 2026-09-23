@@ -1,0 +1,34 @@
+/node_modules/
+/dist/
+/target/
+/src-tauri/target/
+/src-tauri/gen/
+/artifacts/
+*.log
+*.tsbuildinfo
+.DS_Store
+# Local design inputs and historical planning notes are not distributed.
+/assets/brand-reference/
+/PLAN.md
+
+# Local configuration, credentials, and scan data.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+known_hosts*
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+__pycache__/
+*.py[cod]
+.idea/
+.vscode/

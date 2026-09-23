@@ -1,0 +1,14 @@
+[workspace]
+members = ["src-tauri", "crates/spacetrace-scanner"]
+resolver = "2"
+
+[workspace.package]
+license = "MIT"
+authors = ["Smet Software Solutions"]
+homepage = "https://smetsoftwaresolutions.be"
+repository = "https://github.com/sander1993s/SpaceTrace"
+
+[profile.release]
+lto = "thin"
+codegen-units = 16
+strip = true

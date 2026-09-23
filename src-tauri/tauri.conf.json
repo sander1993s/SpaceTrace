@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SpaceTrace",
+  "version": "0.2.0",
+  "identifier": "be.smetsoftwaresolutions.spacetrace",
+  "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://127.0.0.1:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
+  "app": {
+    "windows": [{ "title": "SpaceTrace", "width": 1280, "height": 850, "minWidth": 820, "minHeight": 600, "center": true, "backgroundColor": "#111c29" }],
+    "security": { "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; script-src 'self'" }
+  },
+  "bundle": {
+    "active": true, "targets": ["nsis"], "publisher": "Smet Software Solutions",
+    "copyright": "Copyright © 2026 Smet Software Solutions",
+    "license": "MIT", "licenseFile": "../LICENSE",
+    "category": "Utility", "shortDescription": "See where your storage goes.",
+    "longDescription": "Explore disk usage across local folders, network shares and SSH devices with SpaceTrace.",
+    "homepage": "https://smetsoftwaresolutions.be",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "windows": { "nsis": { "installMode": "currentUser", "displayLanguageSelector": false, "startMenuFolder": "Smet Software Solutions" }, "webviewInstallMode": { "type": "downloadBootstrapper" } }
+  }
+}
