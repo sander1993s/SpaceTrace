@@ -1,0 +1,172 @@
+name: Sign Windows release (pending SignPath onboarding)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: sign-windows-release
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    if: github.repository == 'sander1993s/SpaceTrace' && github.ref == 'refs/heads/main' && vars.SIGNPATH_ENABLED == 'true'
+    environment: signpath-release
+    runs-on: windows-2025
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-msvc
+      CARGO_TERM_COLOR: always
+      EXPECTED_PUBLISHER: ${{ vars.SIGNPATH_EXPECTED_PUBLISHER_SUBJECT }}
+    steps:
+      - name: Check out the manually selected main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Require completed SignPath setup and matching release versions
+        id: release
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_APPLICATION_CONFIG_SLUG: ${{ vars.SIGNPATH_APPLICATION_CONFIG_SLUG }}
+          SIGNPATH_INSTALLER_CONFIG_SLUG: ${{ vars.SIGNPATH_INSTALLER_CONFIG_SLUG }}
+        run: |
+          foreach ($name in @('SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG', 'SIGNPATH_SIGNING_POLICY_SLUG', 'SIGNPATH_APPLICATION_CONFIG_SLUG', 'SIGNPATH_INSTALLER_CONFIG_SLUG', 'EXPECTED_PUBLISHER')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing signing configuration: $name. Complete CODE_SIGNING.md first."
+            }
+          }
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $cargo = Get-Content src-tauri/Cargo.toml -Raw
+          $match = [regex]::Match($cargo, '(?m)^version\s*=\s*"(\d+\.\d+\.\d+)"\s*$')
+          if ($package.version -notmatch '^\d+\.\d+\.\d+$' -or $package.version -cne $config.version -or !$match.Success -or $match.Groups[1].Value -cne $package.version) {
+            throw 'package.json, tauri.conf.json and Cargo.toml must use the same stable release version.'
+          }
+          if ($config.productName -cne 'SpaceTrace') { throw 'Unexpected product name.' }
+          "version=$($package.version)" >> $env:GITHUB_OUTPUT
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Set up Rust stable for Windows x64
+        run: rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
+
+      - name: Install locked JavaScript dependencies
+        run: npm ci --include=dev
+
+      - name: Run the existing build and tests
+        run: ./scripts/build-windows.ps1
+
+      - name: Check application metadata
+        id: application
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          $result = ./scripts/verify-release-artifact.ps1 -Path target/release/spacetrace.exe -Version $env:RELEASE_VERSION
+          "product-version=$($result.ProductVersion)" >> $env:GITHUB_OUTPUT
+
+      # SignPath requires an uploaded GitHub build artifact to verify its origin.
+      - name: Upload unsigned application for signing only
+        id: upload-application
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: UNSIGNED-DO-NOT-DISTRIBUTE-application-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/release/spacetrace.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Request application signing and wait for manual approval
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_APPLICATION_CONFIG_SLUG }}
+          github-artifact-id: ${{ steps.upload-application.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: artifacts/signpath/application
+          parameters: |
+            product-version: ${{ toJSON(steps.application.outputs.product-version) }}
+
+      - name: Verify the signed application and bundle it without rebuilding
+        id: installer
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          $result = ./scripts/verify-release-artifact.ps1 -Path artifacts/signpath/application/spacetrace.exe -Version $env:RELEASE_VERSION -RequireSignature -ExpectedPublisherSubject $env:EXPECTED_PUBLISHER
+          Copy-Item -LiteralPath artifacts/signpath/application/spacetrace.exe -Destination target/release/spacetrace.exe -Force
+          npm run tauri -- bundle --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw 'Tauri bundling failed.' }
+          if ((Get-FileHash -LiteralPath target/release/spacetrace.exe -Algorithm SHA256).Hash -cne $result.SHA256) {
+            throw 'Bundling changed the signed application; refusing to continue.'
+          }
+          $installerName = "SpaceTrace_$($env:RELEASE_VERSION)_x64-setup.exe"
+          $installerPath = Join-Path target/release/bundle/nsis $installerName
+          $installer = ./scripts/verify-release-artifact.ps1 -Path $installerPath -Version $env:RELEASE_VERSION
+          "path=$installerPath" >> $env:GITHUB_OUTPUT
+          "name=$installerName" >> $env:GITHUB_OUTPUT
+          "product-version=$($installer.ProductVersion)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload unsigned installer for signing only
+        id: upload-installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: UNSIGNED-DO-NOT-DISTRIBUTE-installer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.installer.outputs.path }}
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Request installer signing and wait for manual approval
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLER_CONFIG_SLUG }}
+          github-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: artifacts/signpath/installer
+          parameters: |
+            version: ${{ toJSON(steps.release.outputs.version) }}
+            product-version: ${{ toJSON(steps.installer.outputs.product-version) }}
+
+      - name: Verify both signatures and stage the downloadable files
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          INSTALLER_NAME: ${{ steps.installer.outputs.name }}
+        run: |
+          $app = ./scripts/verify-release-artifact.ps1 -Path artifacts/signpath/application/spacetrace.exe -Version $env:RELEASE_VERSION -RequireSignature -ExpectedPublisherSubject $env:EXPECTED_PUBLISHER
+          $installerPath = Join-Path artifacts/signpath/installer $env:INSTALLER_NAME
+          $installer = ./scripts/verify-release-artifact.ps1 -Path $installerPath -Version $env:RELEASE_VERSION -RequireSignature -ExpectedPublisherSubject $env:EXPECTED_PUBLISHER
+          New-Item -ItemType Directory -Path artifacts/release -Force | Out-Null
+          Copy-Item -LiteralPath artifacts/signpath/application/spacetrace.exe -Destination artifacts/release/spacetrace.exe
+          Copy-Item -LiteralPath $installerPath -Destination (Join-Path artifacts/release $env:INSTALLER_NAME)
+          @("$($app.SHA256)  $($app.Name)", "$($installer.SHA256)  $($installer.Name)") | Set-Content artifacts/release/SHA256SUMS.txt
+          "Validated publisher: $($app.Publisher)" >> $env:GITHUB_STEP_SUMMARY
+          "Source commit: $env:GITHUB_SHA" >> $env:GITHUB_STEP_SUMMARY
+          'The application and outer installer are signed. The generated NSIS uninstaller is not covered; see CODE_SIGNING.md.' >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload verified signed files for maintainer download
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: SpaceTrace-${{ steps.release.outputs.version }}-signed-windows-x64
+          path: artifacts/release/*
+          if-no-files-found: error
+          retention-days: 14
