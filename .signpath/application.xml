@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="product-version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="spacetrace.exe" product-name="SpaceTrace" product-version="${product-version}">
+      <authenticode-sign hash-algorithm="sha256" />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

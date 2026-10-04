@@ -4,7 +4,7 @@ A Windows disk-space explorer by [Smet Software Solutions](https://smetsoftwares
 
 <img src="public/brand/spacetrace-mark.png" alt="SpaceTrace compass and storage map icon" width="128" height="128">
 
-[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Report a bug](https://github.com/sander1993s/SpaceTrace/issues)
+[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code signing policy (proposed)](CODE_SIGNING.md) · [Report a bug](https://github.com/sander1993s/SpaceTrace/issues)
 
 ## Run the app
 

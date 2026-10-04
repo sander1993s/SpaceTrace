@@ -939,16 +939,24 @@ mod tests {
         let child = fixture_process("[Console]::Out.WriteLine('{\"event\":\"progress\",\"entries\":1,\"files\":0,\"directories\":1,\"logicalBytes\":0,\"currentPath\":\".\"}');Start-Sleep -Seconds 30");
         let cancel = AtomicBool::new(false);
         let mut events = Vec::new();
-        let started = Instant::now();
+        let mut cancellation_requested_at = None;
         stream_process(child, Vec::new(), None, &cancel, IDLE_TIMEOUT, |event| {
             if matches!(event, ScanEvent::Progress { .. }) {
+                // Measure cancellation independently of PowerShell startup time.
+                cancellation_requested_at = Some(Instant::now());
                 cancel.store(true, Ordering::Relaxed);
             }
             events.push(event);
             Ok(())
         })
         .unwrap();
-        assert!(started.elapsed() < Duration::from_secs(5));
+        let elapsed = cancellation_requested_at
+            .expect("fixture must reach cancellation")
+            .elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "cancellation took {elapsed:?}"
+        );
         assert_eq!(events.len(), 2);
         assert!(matches!(events[1], ScanEvent::Finished { cancelled: true }));
     }
