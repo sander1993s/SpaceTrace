@@ -13,7 +13,9 @@ Build from source using the instructions below. The Windows installer is written
 - **This PC:** choose any readable local folder or drive. Recursive scanning stays inside ordinary directories and does not follow symbolic links or junctions.
 - **Network share:** enter a UNC path such as `\\server\share` or choose an accessible mapped drive. Your existing Windows permissions apply.
 - **SSH device:** enter host, port, username, operating system, and starting folder. Use your SSH agent or select a private-key file. Verify the presented SHA-256 host fingerprint before trusting a new host. Changed keys are refused.
-- Explore storage through the interactive treemap, flat folder table, or expandable folder tree view. Switch between logical and allocated size, inspect scan issues, and export a `.json` report. Cancel preserves the results already discovered.
+- Explore storage through the interactive treemap, flat folder table, or expandable folder tree view. Switch between logical and allocated size, inspect scan issues, and export a report as JSON or as streamable NDJSON, optionally gzip-compressed. Cancel preserves the results already discovered.
+- **Last change** shows when anything inside a folder was last modified, so folders nobody has touched in months stand out. A folder's own timestamp only changes when entries are added or removed, so it is not used for this.
+- Delete a saved scan from its page to free the space its results take in SpaceTrace's database. This removes only SpaceTrace's records; nothing on the scanned location is touched.
 
 ### Folder tree navigation
 
@@ -45,7 +47,7 @@ Bundled metadata helpers execute inline over the authenticated connection. They 
 
 No file contents are read for classification. Cloud placeholders are treated conservatively and reparse directories are skipped to avoid hydration. Local scans and remote helpers do not follow links. Linux scans stay on the starting filesystem and skip virtual filesystem roots. The app makes no claim of a point-in-time filesystem snapshot.
 
-Saved reports live in SpaceTrace's local application-data directory in SQLite. Source paths are private local data; no cloud account, telemetry, or upload service is used. JSON exports contain paths and scan metadata but no private keys, passwords, or private-key file references.
+Saved reports live in SpaceTrace's local application-data directory in SQLite. A whole-drive scan can take a gigabyte or more there; deleting a scan compacts the database to return that space. Source paths are private local data; no cloud account, telemetry, or upload service is used. Exported reports contain paths and scan metadata but no private keys, passwords, or private-key file references.
 
 ## Develop and build
 
@@ -76,7 +78,7 @@ The independent scanner CLI is useful for fixtures and diagnostics:
 cargo run -p spacetrace-scanner --bin spacetrace-scan -- 'C:\Example'
 ```
 
-It writes newline-delimited internal scan events. The app's **Export JSON** produces the versioned public report with exact decimal-string byte sizes; see [the report format](docs/report-format.md).
+It writes newline-delimited internal scan events. The app's **Export report** produces the versioned public report (JSON or NDJSON, optionally gzip) with exact decimal-string byte sizes; see [the report format](docs/report-format.md).
 
 Set `SPACETRACE_DATA_DIR` only when using an isolated test database. The normal application uses its own local app-data folder. Never place a test database inside the directory being scanned.
 

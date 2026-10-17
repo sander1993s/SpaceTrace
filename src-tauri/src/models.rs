@@ -46,6 +46,10 @@ pub struct NodeInfo {
     pub modified: Option<String>,
     pub complete: bool,
     pub shared: bool,
+    /// Directories only: the latest modification time of the directory or any
+    /// descendant. Absent for other kinds and for scans saved by older versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newest_modified: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -65,6 +69,15 @@ pub struct BrowseResult {
     pub total_children: u64,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteOutcome {
+    /// Bytes by which the scan database shrank, as a decimal string.
+    pub reclaimed_bytes: String,
+    /// False when the deletion succeeded but the database could not be compacted.
+    pub compacted: bool,
+}
+
 impl From<&spacetrace_scanner::Node> for NodeInfo {
     fn from(n: &spacetrace_scanner::Node) -> Self {
         Self {
@@ -80,6 +93,7 @@ impl From<&spacetrace_scanner::Node> for NodeInfo {
             modified: n.modified.clone(),
             complete: n.complete,
             shared: n.shared,
+            newest_modified: None,
         }
     }
 }

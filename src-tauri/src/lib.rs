@@ -1,4 +1,5 @@
 mod models;
+mod recency;
 mod remote;
 mod store;
 
@@ -21,9 +22,19 @@ struct Inner {
     db: PathBuf,
     known_hosts: PathBuf,
     jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Set while a saved scan is deleted and the database compacted. Changed only
+    /// while holding `jobs`, so a scan cannot start in the middle of compaction.
+    maintenance: AtomicBool,
 }
 
 type Result<T> = std::result::Result<T, String>;
+
+struct MaintenanceGuard<'a>(&'a AtomicBool);
+impl Drop for MaintenanceGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 
 fn validate_request(request: &ScanRequest) -> Result<()> {
     if request.root.trim().is_empty() || request.root.contains('\0') {
@@ -74,6 +85,11 @@ fn start_scan_inner(state: &AppState, request: ScanRequest) -> Result<ScanInfo> 
     if !jobs.is_empty() {
         return Err("A scan is already running. Cancel it before starting another.".into());
     }
+    if state.0.maintenance.load(Ordering::SeqCst) {
+        return Err(
+            "SpaceTrace is freeing the space of a deleted scan. Try again when it finishes.".into(),
+        );
+    }
     let name = Path::new(request.root.trim_end_matches(['\\', '/']))
         .file_name()
         .and_then(|n| n.to_str())
@@ -114,6 +130,7 @@ fn start_scan_inner(state: &AppState, request: ScanRequest) -> Result<ScanInfo> 
             modified: None,
             complete: false,
             shared: false,
+            newest_modified: None,
         },
     )?;
     let cancel = Arc::new(AtomicBool::new(false));
@@ -153,10 +170,12 @@ fn run_worker(state: &AppState, mut info: ScanInfo, cancel: Arc<AtomicBool>) -> 
     let mut finished = false;
     let mut root = store::node(&conn, &info.id, 0)?;
     let request = info.source.clone();
+    let mut newest = recency::NewestTracker::default();
     let mut emit = |event: ScanEvent| -> Result<()> {
         match event {
             ScanEvent::Node { node } => {
-                let n = NodeInfo::from(&node);
+                let mut n = NodeInfo::from(&node);
+                newest.observe(&mut n);
                 if n.id == 0 {
                     root = n.clone();
                     info.logical_bytes = n.logical_bytes.clone();
@@ -349,6 +368,31 @@ async fn export_scan(state: State<'_, AppState>, scan_id: String, path: String) 
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
+async fn delete_scan(state: State<'_, AppState>, scan_id: String) -> Result<DeleteOutcome> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || delete_scan_inner(&state, &scan_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+fn delete_scan_inner(state: &AppState, scan_id: &str) -> Result<DeleteOutcome> {
+    {
+        let jobs = state
+            .0
+            .jobs
+            .lock()
+            .map_err(|_| "Scan coordinator is unavailable.")?;
+        // Compaction rewrites the whole database, which would stall a running scan.
+        if !jobs.is_empty() {
+            return Err("Stop the running scan before deleting saved scans.".into());
+        }
+        if state.0.maintenance.swap(true, Ordering::SeqCst) {
+            return Err("Another saved scan is being deleted. Try again when it finishes.".into());
+        }
+    }
+    let _guard = MaintenanceGuard(&state.0.maintenance);
+    store::delete_scan(&state.0.db, scan_id)
+}
+#[tauri::command]
 async fn probe_host(
     state: State<'_, AppState>,
     host: String,
@@ -392,6 +436,7 @@ pub fn run() {
                 db,
                 known_hosts: directory.join("known_hosts"),
                 jobs: Mutex::new(HashMap::new()),
+                maintenance: AtomicBool::new(false),
             })));
             Ok(())
         })
@@ -414,6 +459,7 @@ pub fn run() {
             get_issues,
             cancel_scan,
             export_scan,
+            delete_scan,
             probe_host,
             trust_host
         ])
@@ -437,6 +483,7 @@ mod integration_tests {
             db: db.clone(),
             known_hosts: temp.path().join("known_hosts"),
             jobs: Mutex::new(HashMap::new()),
+            maintenance: AtomicBool::new(false),
         }));
         let info = ScanInfo {
             id: "integration".into(),
@@ -480,6 +527,7 @@ mod integration_tests {
                 modified: None,
                 complete: false,
                 shared: false,
+                newest_modified: None,
             },
         )
         .unwrap();
@@ -501,6 +549,45 @@ mod integration_tests {
             serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
         assert_eq!(json["nodes"].as_array().unwrap().len(), 4);
         assert_eq!(json["totals"]["logicalBytes"], "17");
+
+        // Directories carry the latest change inside them; files do not.
+        let nested = std::fs::metadata(root.join("nested/two.bin"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        let nested_seconds = nested
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let nodes = json["nodes"].as_array().unwrap();
+        let by_name = |name: &str| nodes.iter().find(|n| n["name"] == name).unwrap();
+        let newest = by_name("nested")["newestModified"].as_str().unwrap();
+        assert!(recency::epoch_seconds(newest).unwrap() >= nested_seconds);
+        assert!(by_name("one.txt").get("newestModified").is_none());
+        assert!(nodes[0]["newestModified"].is_string());
+
+        // Deleting is refused while any scan runs, then removes every saved row.
+        state
+            .0
+            .jobs
+            .lock()
+            .unwrap()
+            .insert("running".into(), Arc::new(AtomicBool::new(false)));
+        assert!(delete_scan_inner(&state, "integration").is_err());
+        state.0.jobs.lock().unwrap().clear();
+        let outcome = delete_scan_inner(&state, "integration").unwrap();
+        assert!(outcome.compacted);
+        assert!(!state.0.maintenance.load(Ordering::SeqCst));
+        assert!(store::get_scan(&conn, "integration").is_err());
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM nodes) + (SELECT COUNT(*) FROM issues)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+        assert!(delete_scan_inner(&state, "integration").is_err());
     }
 }
 
