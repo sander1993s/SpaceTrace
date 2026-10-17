@@ -3269,10 +3269,11 @@ dependencies = [
 
 [[package]]
 name = "spacetrace"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "flate2",
  "rusqlite",
  "serde",
  "serde_json",

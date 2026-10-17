@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { BrowseResult, Metric, NodeInfo } from '../contracts';
 import { formatBytes, nodeColor } from '../lib/treemap';
+import { lastChange } from '../lib/recency';
 import { native, errorText } from './Modal';
 import {
   type BranchData,
@@ -855,7 +856,7 @@ export default function FolderTree({
   const rootBranch = branches.get(0);
   const isScanning = scanStatus === 'scanning';
   const nameMinPx = Math.max(280, 180 + (maxDepth + 1) * 22);
-  const gridTemplateColumns = `minmax(${nameMinPx}px, 1.8fr) 110px 140px 85px 45px`;
+  const gridTemplateColumns = `minmax(${nameMinPx}px, 1.8fr) 110px 140px 85px 100px 45px`;
 
   return (
     <div className="tree-panel">
@@ -880,7 +881,7 @@ export default function FolderTree({
           tabIndex={-1}
           onKeyDown={handleKeyDown}
           ref={treeRef}
-          style={{ minWidth: `${nameMinPx + 380}px` }}
+          style={{ minWidth: `${nameMinPx + 480}px` }}
         >
           <div className="tree-header" role="presentation" style={{ gridTemplateColumns }}>
             <span className="tree-header-cell">Name</span>
@@ -892,6 +893,7 @@ export default function FolderTree({
               Of parent
             </span>
             <span className="tree-header-cell align-right">Files</span>
+            <span className="tree-header-cell align-right">Last change</span>
             <span className="tree-header-cell align-center" aria-label="Status" />
           </div>
 
@@ -1037,6 +1039,10 @@ export default function FolderTree({
 
                     <div className="tree-files-col">
                       {isDir ? node.files.toLocaleString() : '—'}
+                    </div>
+
+                    <div className="tree-date-col" title={lastChange(node).title}>
+                      {lastChange(node).text}
                     </div>
 
                     <div className="tree-status-col" />

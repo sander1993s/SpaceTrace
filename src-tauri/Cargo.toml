@@ -1,6 +1,6 @@
 [package]
 name = "spacetrace"
-version = "0.2.0"
+version = "0.3.0"
 description = "See where your storage goes."
 authors.workspace = true
 license.workspace = true
@@ -26,6 +26,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 base64 = "0.22"
+flate2 = "1"
 spacetrace-scanner = { path = "../crates/spacetrace-scanner" }
 tempfile = "3"
 

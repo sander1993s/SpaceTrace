@@ -76,6 +76,7 @@ fn directory(id: i64, parent_id: Option<i64>, path: &str) -> NodeInfo {
         modified: Some("2025-12-31T23:59:00Z".into()),
         complete: false,
         shared: false,
+        newest_modified: None,
     }
 }
 
@@ -136,6 +137,43 @@ fn reconcile_keeps_nested_file_received_without_a_progress_event() {
 }
 
 #[test]
+fn reconcile_rebuilds_the_newest_change_inside_each_directory() {
+    let fixture = Fixture::new();
+    let conn = fixture.connect();
+    let mut old = directory(1, Some(0), "old");
+    old.modified = Some("2020-01-01T00:00:00Z".into());
+    let mut recent_file = file(4, 2, "recent/new.bin", 1, Some(4096));
+    recent_file.modified = Some("2026-10-16T09:57:33.5+00:00".into());
+    persist(
+        &conn,
+        &[
+            directory(0, None, "."),
+            old,
+            directory(2, Some(0), "recent"),
+            file(3, 1, "old/old.bin", 1, Some(4096)),
+            recent_file,
+        ],
+    );
+    let mut old_file = store::node(&conn, SCAN, 3).unwrap();
+    old_file.modified = Some("2019-06-01T00:00:00Z".into());
+    store::save_node(&conn, SCAN, &old_file).unwrap();
+
+    let root = store::reconcile_partial(&conn, SCAN).unwrap();
+    assert_eq!(
+        root.newest_modified.as_deref(),
+        Some("2026-10-16T09:57:33Z")
+    );
+    // A directory's own time counts too: "old" was changed after its file.
+    let old = store::node(&conn, SCAN, 1).unwrap();
+    assert_eq!(old.newest_modified.as_deref(), Some("2020-01-01T00:00:00Z"));
+    assert_eq!(
+        store::node(&conn, SCAN, 4).unwrap().newest_modified,
+        None,
+        "files keep only their own modified time"
+    );
+}
+
+#[test]
 fn reconcile_does_not_add_completed_branch_totals_twice() {
     let fixture = Fixture::new();
     let conn = fixture.connect();
@@ -149,6 +187,8 @@ fn reconcile_does_not_add_completed_branch_totals_twice() {
     archive.allocated_bytes = Some("8192".into());
     archive.files = 2;
     archive.complete = true;
+    // As recorded by a live scan; every fixture timestamp is the same.
+    archive.newest_modified = Some("2025-12-31T23:59:00Z".into());
     let original_archive = serde_json::to_value(&archive).unwrap();
     persist(
         &conn,
